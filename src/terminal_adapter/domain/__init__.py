@@ -17,6 +17,14 @@ from .session_manager import (
     WALEntry,
 )
 
+from .tga_client import (
+    TGAClient,
+    ActionRequest,
+    SupervisorResponse,
+    SupervisorDecision,
+    TGAError,
+)
+
 __all__ = [
     "RiskLevel",
     "PolicyManifest",
@@ -27,6 +35,11 @@ __all__ = [
     "SessionManager",
     "WriteAheadLog",
     "WALEntry",
+    "TGAClient",
+    "ActionRequest",
+    "SupervisorResponse",
+    "SupervisorDecision",
+    "TGAError",
     "COMMAND_RISK_MAP",
     "COMMAND_BLOCKLIST",
 ]

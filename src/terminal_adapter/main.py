@@ -25,6 +25,9 @@ from terminal_adapter.domain import (
     PolicyManifest,
     CommandClassifier,
     SessionManager,
+    TGAClient,
+    SupervisorDecision,
+    TGAError,
 )
 
 # Configure logging
@@ -88,6 +91,7 @@ class AppState:
     """Global application state."""
     classifier: Optional[CommandClassifier] = None
     session_manager: Optional[SessionManager] = None
+    tga_client: Optional[TGAClient] = None
     project_root: str = ""
     paranoid_mode: bool = False
 
@@ -136,6 +140,9 @@ async def lifespan(app: FastAPI):
     
     # Start periodic anchoring
     await state.session_manager.start_anchor_loop()
+    
+    # Initialize TGA client
+    state.tga_client = TGAClient()
     
     logger.info(f"Terminal Adapter started (project_root={project_root}, paranoid={state.paranoid_mode})")
     
@@ -215,20 +222,59 @@ async def terminal_execute(
     
     # 3. Handle based on risk level
     if classification.risk_level == RiskLevel.HIGH_RISK:
-        # Halt - require Supervisor approval (not implemented yet)
-        raise HTTPException(
-            status_code=403,
-            detail=f"HIGH_RISK command requires Supervisor approval: {request.command}"
+        # Escalate to Supervisor
+        if not state.tga_client:
+            raise HTTPException(status_code=503, detail="TGA client not initialized")
+        
+        action_request = state.tga_client.build_action_request(
+            command=request.command,
+            args=request.args,
+            cwd=cwd,
+            risk_level=RiskLevel.HIGH_RISK,
         )
+        
+        try:
+            async with TGAClient() as tga:
+                response = await tga.request_approval(action_request)
+                
+            if response.decision != SupervisorDecision.APPROVED:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Supervisor rejected HIGH_RISK command: {response.rationale or 'No reason given'}"
+                )
+            logger.info(f"Supervisor approved HIGH_RISK command: {request.command}")
+        except TGAError as e:
+            raise HTTPException(status_code=502, detail=f"TGA error: {e}")
+        except TimeoutError:
+            raise HTTPException(status_code=408, detail="Supervisor approval timed out")
     
     if classification.risk_level == RiskLevel.WRITE:
         # In v1, WRITE also blocks for Supervisor (per spec constraint)
         # For now, we allow in dev mode
         if os.getenv("TALOS_ENV") != "dev":
-            raise HTTPException(
-                status_code=403,
-                detail=f"WRITE command requires Supervisor approval: {request.command}"
+            if not state.tga_client:
+                raise HTTPException(status_code=503, detail="TGA client not initialized")
+            
+            action_request = state.tga_client.build_action_request(
+                command=request.command,
+                args=request.args,
+                cwd=cwd,
+                risk_level=RiskLevel.WRITE,
             )
+            
+            try:
+                async with TGAClient() as tga:
+                    response = await tga.request_approval(action_request)
+                    
+                if response.decision != SupervisorDecision.APPROVED:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Supervisor rejected WRITE command: {response.rationale or 'No reason given'}"
+                    )
+            except TGAError as e:
+                raise HTTPException(status_code=502, detail=f"TGA error: {e}")
+            except TimeoutError:
+                raise HTTPException(status_code=408, detail="Supervisor approval timed out")
     
     # 4. Get or create session
     if request.session_id:
