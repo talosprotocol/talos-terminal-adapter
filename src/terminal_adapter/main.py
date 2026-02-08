@@ -28,6 +28,9 @@ from terminal_adapter.domain import (
     TGAClient,
     SupervisorDecision,
     TGAError,
+    PTYExecutor,
+    InteractiveSession,
+    SessionState,
 )
 
 # Configure logging
@@ -92,6 +95,7 @@ class AppState:
     classifier: Optional[CommandClassifier] = None
     session_manager: Optional[SessionManager] = None
     tga_client: Optional[TGAClient] = None
+    pty_executor: Optional[PTYExecutor] = None
     project_root: str = ""
     paranoid_mode: bool = False
 
@@ -144,11 +148,17 @@ async def lifespan(app: FastAPI):
     # Initialize TGA client
     state.tga_client = TGAClient()
     
+    # Initialize PTY executor for interactive sessions
+    state.pty_executor = PTYExecutor(project_root=project_root)
+    
     logger.info(f"Terminal Adapter started (project_root={project_root}, paranoid={state.paranoid_mode})")
     
     yield
     
     # Shutdown
+    if state.pty_executor:
+        await state.pty_executor.cleanup_all()
+    
     if state.session_manager:
         await state.session_manager.stop_anchor_loop()
     
@@ -339,8 +349,21 @@ async def terminal_list_sessions():
 @app.post("/tools/terminal:write_input")
 async def terminal_write_input(request: TerminalWriteInputRequest = Body(...)):
     """Write stdin to a running session."""
-    # TODO: Implement interactive session management
-    raise HTTPException(status_code=501, detail="Interactive sessions not yet implemented")
+    if not state.pty_executor:
+        raise HTTPException(status_code=503, detail="PTY executor not initialized")
+    
+    session = await state.pty_executor.get_session(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not session.is_alive():
+        raise HTTPException(status_code=400, detail="Session is not running")
+    
+    success = await state.pty_executor.write_input(request.session_id, request.data)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to write to session")
+    
+    return {"success": True, "session_id": request.session_id}
 
 
 @app.post("/tools/terminal:anchor_session", response_model=TerminalAnchorResponse)
@@ -363,10 +386,64 @@ async def terminal_anchor_session(session_id: str):
 
 
 @app.post("/tools/terminal:abort")
-async def terminal_abort(session_id: str):
+async def terminal_abort(session_id: str, force: bool = False):
     """Abort a running command in a session."""
-    # TODO: Implement session process tracking and SIGTERM
-    raise HTTPException(status_code=501, detail="Session abort not yet implemented")
+    if not state.pty_executor:
+        raise HTTPException(status_code=503, detail="PTY executor not initialized")
+    
+    session = await state.pty_executor.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    success = await state.pty_executor.abort_session(session_id, force=force)
+    if not success:
+        raise HTTPException(status_code=400, detail="Session is not running")
+    
+    return {"success": True, "session_id": session_id, "state": "aborted"}
+
+
+@app.get("/tools/terminal:stream")
+async def terminal_stream(session_id: str):
+    """Stream real-time output from a session using Server-Sent Events (SSE).
+    
+    Returns a text/event-stream response with output chunks.
+    """
+    from fastapi.responses import StreamingResponse
+    
+    if not state.pty_executor:
+        raise HTTPException(status_code=503, detail="PTY executor not initialized")
+    
+    session = await state.pty_executor.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    async def stream_generator():
+        """Generate SSE events from session output."""
+        while True:
+            # Read accumulated output
+            output, is_complete = await state.pty_executor.read_output(
+                session_id, 
+                timeout_ms=5000
+            )
+            
+            if output:
+                # SSE format: data: <content>\n\n
+                yield f"data: {output}\n\n"
+            
+            if is_complete:
+                yield "event: complete\ndata: {}\n\n"
+                break
+            
+            await asyncio.sleep(0.05)
+    
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 # ============================================================================

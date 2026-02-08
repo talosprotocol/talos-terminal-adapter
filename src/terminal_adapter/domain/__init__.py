@@ -25,6 +25,12 @@ from .tga_client import (
     TGAError,
 )
 
+from .pty_executor import (
+    PTYExecutor,
+    InteractiveSession,
+    SessionState,
+)
+
 __all__ = [
     "RiskLevel",
     "PolicyManifest",
@@ -40,6 +46,9 @@ __all__ = [
     "SupervisorResponse",
     "SupervisorDecision",
     "TGAError",
+    "PTYExecutor",
+    "InteractiveSession",
+    "SessionState",
     "COMMAND_RISK_MAP",
     "COMMAND_BLOCKLIST",
 ]
