@@ -118,7 +118,17 @@ Commands are classified by risk level:
 
 ## Testing
 
+To run the tests, ensure you have a standard Python environment with `pip` available (e.g., via `pyenv` or `virtualenv`). The system Python may be restricted.
+
 ```bash
+# Create venv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -e ".[dev]"
+
+# Run tests
 pytest tests/
 ```
 
