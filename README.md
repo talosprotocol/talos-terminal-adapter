@@ -73,6 +73,17 @@ curl -X POST http://localhost:8083/tools/terminal:execute \
 
 # List sessions
 curl http://localhost:8083/tools/terminal:list_sessions
+
+# Interactive session: write stdin to a running process
+curl -X POST http://localhost:8083/tools/terminal:write_input \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "<id>", "data": "yes\n"}'
+
+# Abort a running session
+curl -X POST "http://localhost:8083/tools/terminal:abort?session_id=<id>"
+
+# Stream real-time output (SSE)
+curl -N http://localhost:8083/tools/terminal:stream?session_id=<id>
 ```
 
 ## MCP Tools
@@ -80,10 +91,10 @@ curl http://localhost:8083/tools/terminal:list_sessions
 | Tool | Scope | Risk | Description |
 |------|-------|------|-------------|
 | `terminal:execute` | `terminal:write` | WRITE | Execute command, wait for completion |
-| `terminal:stream` | `terminal:write` | WRITE | Execute command, stream output |
+| `terminal:stream` | `terminal:write` | WRITE | Stream output via SSE |
 | `terminal:read` | `terminal:read` | READ | Read from existing session |
 | `terminal:write_input` | `terminal:write` | WRITE | Send stdin to running session |
-| `terminal:abort` | `terminal:write` | WRITE | Send SIGINT/SIGTERM to session |
+| `terminal:abort` | `terminal:write` | WRITE | Send SIGTERM/SIGKILL to session |
 | `terminal:list_sessions` | `terminal:read` | READ | List active terminal sessions |
 | `terminal:anchor_session` | `terminal:read` | READ | Force anchor session tree |
 
@@ -103,6 +114,7 @@ Commands are classified by risk level:
 - **Paranoid Mode**: If manifest is invalid, ALL commands require Supervisor approval
 - **Path Sandboxing**: Working directory confined to project root
 - **Environment Filtering**: Dangerous env vars (LD_PRELOAD, etc.) are blocked
+- **TGA Integration**: HIGH_RISK commands escalate to Supervisor for approval
 
 ## Testing
 
