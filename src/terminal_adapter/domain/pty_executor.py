@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import uuid
 
@@ -36,7 +36,7 @@ class InteractiveSession:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     pid: int = 0
     master_fd: int = -1
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     state: SessionState = SessionState.STARTING
     command: str = ""
     args: List[str] = field(default_factory=list)
@@ -70,6 +70,14 @@ class PTYExecutor:
         self.project_root = project_root
         self.sessions: Dict[str, InteractiveSession] = {}
         self._read_tasks: Dict[str, asyncio.Task] = {}
+
+    @staticmethod
+    def _is_session_active(session: InteractiveSession) -> bool:
+        return session.master_fd >= 0 and session.state in {
+            SessionState.STARTING,
+            SessionState.RUNNING,
+            SessionState.WAITING_INPUT,
+        }
     
     async def start_session(
         self,
@@ -188,7 +196,7 @@ class PTYExecutor:
             True if written successfully
         """
         session = self.sessions.get(session_id)
-        if not session or not session.is_alive():
+        if not session or not self._is_session_active(session):
             return False
         
         try:
@@ -210,7 +218,7 @@ class PTYExecutor:
             True if signal was sent
         """
         session = self.sessions.get(session_id)
-        if not session or not session.is_alive():
+        if not session or not self._is_session_active(session):
             return False
         
         sig = signal.SIGKILL if force else signal.SIGTERM
@@ -259,7 +267,7 @@ class PTYExecutor:
         timeout = timeout_ms / 1000
         
         while asyncio.get_event_loop().time() - start < timeout:
-            if not session.is_alive():
+            if not self._is_session_active(session):
                 break
             if session.stdout_buffer:
                 break
@@ -269,7 +277,7 @@ class PTYExecutor:
         output = session.stdout_buffer
         session.stdout_buffer = ""
         
-        return output, not session.is_alive()
+        return output, not self._is_session_active(session)
     
     async def _cleanup_session(self, session: InteractiveSession) -> None:
         """Clean up a finished session."""

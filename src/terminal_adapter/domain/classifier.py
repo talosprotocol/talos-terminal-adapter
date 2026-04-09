@@ -11,8 +11,11 @@ import json
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
+
+
+from .crypto import verify_json_signature
 
 
 class RiskLevel(Enum):
@@ -49,9 +52,25 @@ class PolicyManifest:
         
         Returns True if valid, False if tampered (triggers Paranoid Mode).
         """
-        # TODO: Implement Ed25519 signature verification
-        # For now, return True in dev mode
-        return True
+        if not self.signature:
+            return False
+            
+        # 1. Extract data for signing (everything except the signature itself)
+        data = {
+            "version": self.version,
+            "safe_commands": self.safe_commands,
+            "write_commands": self.write_commands,
+            "blocked_patterns": self.blocked_patterns,
+        }
+        
+        # 2. Convert hex signature to bytes
+        try:
+            sig_bytes = bytes.fromhex(self.signature)
+        except ValueError:
+            return False
+            
+        # 3. Verify using crypto utility (uses JCS internally)
+        return verify_json_signature(data, sig_bytes, supervisor_public_key)
 
 
 # Default command risk patterns (used when manifest unavailable)
@@ -171,7 +190,19 @@ class CommandClassifier:
                     is_blocked=False
                 )
         
-        # 4. Fallback to regex pattern matching
+        # 4. Fallback to regex pattern matching.
+        # Check HIGH_RISK before READ/WRITE so shell redirection and similar
+        # constructs cannot be misclassified by a benign binary prefix.
+        for pattern in self._high_risk_patterns:
+            if pattern.search(full_command):
+                return ClassificationResult(
+                    command=command,
+                    args=args,
+                    risk_level=RiskLevel.HIGH_RISK,
+                    is_blocked=False,
+                    matched_pattern=pattern.pattern
+                )
+
         for pattern in self._read_patterns:
             if pattern.search(full_command):
                 return ClassificationResult(
@@ -192,16 +223,6 @@ class CommandClassifier:
                     matched_pattern=pattern.pattern
                 )
         
-        for pattern in self._high_risk_patterns:
-            if pattern.search(full_command):
-                return ClassificationResult(
-                    command=command,
-                    args=args,
-                    risk_level=RiskLevel.HIGH_RISK,
-                    is_blocked=False,
-                    matched_pattern=pattern.pattern
-                )
-        
         # 5. Default: unknown commands are HIGH_RISK
         return ClassificationResult(
             command=command,
@@ -217,7 +238,7 @@ class TerminalAction:
     """A single terminal action for audit logging."""
     action_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str = ""
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     command: str = ""
     args: List[str] = field(default_factory=list)
     cwd: str = ""

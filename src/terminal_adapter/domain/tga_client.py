@@ -20,6 +20,9 @@ import httpx
 logger = logging.getLogger("terminal-adapter.tga")
 
 
+from .crypto import sign_json, verify_json_signature, canonical_json
+
+
 class RiskLevel(str, Enum):
     """Risk classification matching TGA domain."""
     READ = "READ"
@@ -67,10 +70,31 @@ class ActionRequest:
             self.digest = self._compute_digest()
     
     def _compute_digest(self) -> str:
-        """Compute SHA-256 digest of the proposal."""
-        proposal_json = json.dumps(self.proposal, sort_keys=True, separators=(',', ':'))
-        return hashlib.sha256(proposal_json.encode()).hexdigest()
+        """Compute SHA-256 digest of the proposal using JCS."""
+        proposal_jcs = canonical_json(self.proposal)
+        return hashlib.sha256(proposal_jcs).hexdigest()
     
+    def sign(self, private_key: bytes) -> str:
+        """Sign the action request using Ed25519 and JCS.
+        
+        Returns the hex-encoded signature.
+        """
+        data = {
+            "agent_id": self.agent_id,
+            "trace_id": self.trace_id,
+            "plan_id": self.plan_id,
+            "action_request_id": self.action_request_id,
+            "ts": self.ts,
+            "risk_level": self.risk_level.value,
+            "intent": self.intent,
+            "resources": self.resources,
+            "proposal": self.proposal,
+            "digest": self.digest,
+        }
+        sig_bytes = sign_json(data, private_key)
+        self.signature = sig_bytes.hex()
+        return self.signature
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
@@ -110,10 +134,12 @@ class TGAClient:
         self,
         tga_url: Optional[str] = None,
         agent_id: Optional[str] = None,
+        supervisor_public_key: Optional[bytes] = None,
         timeout_seconds: int = 30
     ):
         self.tga_url = tga_url or os.getenv("TALOS_TGA_URL", "http://localhost:8080")
         self.agent_id = agent_id or os.getenv("TALOS_AGENT_ID", "did:key:anonymous")
+        self.supervisor_public_key = supervisor_public_key
         self.timeout = timeout_seconds
         self._client: Optional[httpx.AsyncClient] = None
     
@@ -230,7 +256,8 @@ class TGAClient:
         self,
         scope: str,
         command: str,
-        risk_level: RiskLevel
+        risk_level: RiskLevel,
+        capability_token: Optional[str] = None
     ) -> bool:
         """Check if the agent has a valid capability for the operation.
         
@@ -238,6 +265,7 @@ class TGAClient:
             scope: Required capability scope (e.g., "terminal:write")
             command: Command being executed
             risk_level: Risk level of the command
+            capability_token: JWT/JSON-serialized capability token
             
         Returns:
             True if capability is valid, False otherwise
@@ -246,13 +274,28 @@ class TGAClient:
         if risk_level == RiskLevel.READ:
             return True
         
-        # In dev mode, allow all operations
-        if os.getenv("TALOS_ENV") == "dev":
+        # In dev mode, allow all operations if specifically requested
+        if os.getenv("TALOS_ENV") == "dev" and not capability_token:
             logger.debug(f"Dev mode: bypassing capability check for {scope}")
             return True
-        
-        # TODO: Implement full capability validation against TGA
-        # For now, return False for HIGH_RISK (requires escalation)
+            
+        if not capability_token:
+            return False
+            
+        # If we have a supervisor public key, verify the capability
+        if self.supervisor_public_key:
+            try:
+                # Assuming capability_token is JSON string if not starting with 'ey' (JWT)
+                # If it's a JSON string, it should have {data: ..., signature: ...}
+                cap_data = json.loads(capability_token)
+                if "signature" in cap_data and "data" in cap_data:
+                    sig = bytes.fromhex(cap_data["signature"])
+                    return verify_json_signature(cap_data["data"], sig, self.supervisor_public_key)
+            except Exception as e:
+                logger.error(f"Capability verification failed: {e}")
+                return False
+                
+        # Default to False for HIGH_RISK if no valid token
         return risk_level != RiskLevel.HIGH_RISK
 
 
