@@ -21,13 +21,7 @@ logger = logging.getLogger("terminal-adapter.tga")
 
 
 from .crypto import sign_json, verify_json_signature, canonical_json
-
-
-class RiskLevel(str, Enum):
-    """Risk classification matching TGA domain."""
-    READ = "READ"
-    WRITE = "WRITE"
-    HIGH_RISK = "HIGH_RISK"
+from .classifier import RiskLevel
 
 
 class SupervisorDecision(str, Enum):
@@ -270,15 +264,10 @@ class TGAClient:
         Returns:
             True if capability is valid, False otherwise
         """
-        # For READ operations, allow without capability check in dev mode
+        # For READ operations, allow without capability check
         if risk_level == RiskLevel.READ:
             return True
         
-        # In dev mode, allow all operations if specifically requested
-        if os.getenv("TALOS_ENV") == "dev" and not capability_token:
-            logger.debug(f"Dev mode: bypassing capability check for {scope}")
-            return True
-            
         if not capability_token:
             return False
             
@@ -295,8 +284,8 @@ class TGAClient:
                 logger.error(f"Capability verification failed: {e}")
                 return False
                 
-        # Default to False for HIGH_RISK if no valid token
-        return risk_level != RiskLevel.HIGH_RISK
+        # Default to False for WRITE/HIGH_RISK if no valid token
+        return False
 
 
 class TGAError(Exception):

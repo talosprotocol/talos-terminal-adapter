@@ -114,10 +114,12 @@ class SessionManager:
     def __init__(
         self,
         project_root: str,
-        anchor_callback: Optional[Callable[[str, str], Any]] = None
+        anchor_callback: Optional[Callable[[str, str], Any]] = None,
+        wal_dir: Optional[str] = None,
     ):
         self.project_root = project_root
         self.anchor_callback = anchor_callback
+        self.wal_dir = wal_dir or os.getenv("TALOS_TERMINAL_SESSION_DIR", "~/.talos/sessions")
         self.sessions: Dict[str, TerminalSession] = {}
         self.wals: Dict[str, WriteAheadLog] = {}
         self._anchor_task: Optional[asyncio.Task] = None
@@ -127,7 +129,7 @@ class SessionManager:
         """Create a new terminal session."""
         session = TerminalSession(project_root=self.project_root)
         self.sessions[session.session_id] = session
-        self.wals[session.session_id] = WriteAheadLog(session.session_id)
+        self.wals[session.session_id] = WriteAheadLog(session.session_id, self.wal_dir)
         self._last_anchor[session.session_id] = datetime.utcnow()
         
         logger.info(f"Created session {session.session_id}")

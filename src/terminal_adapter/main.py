@@ -14,11 +14,18 @@ import logging
 import subprocess
 import pty
 import select
+import json
+import uuid
+import hashlib
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException, Body, Header
 from pydantic import BaseModel, Field
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from terminal_adapter.domain import (
     RiskLevel,
@@ -98,6 +105,7 @@ class AppState:
     pty_executor: Optional[PTYExecutor] = None
     project_root: str = ""
     paranoid_mode: bool = False
+    supervisor_public_key: Optional[bytes] = None
 
 
 state = AppState()
@@ -107,22 +115,57 @@ state = AppState()
 # Lifespan Management
 # ============================================================================
 
+def load_supervisor_key() -> Optional[bytes]:
+    """Load Supervisor public key from PEM environment variable."""
+    pem_key = os.getenv("TGA_SUPERVISOR_PUBLIC_KEY")
+    if not pem_key:
+        logger.warning("TGA_SUPERVISOR_PUBLIC_KEY not set")
+        return None
+    
+    try:
+        # If it's a file path, read it
+        if os.path.exists(pem_key):
+            with open(pem_key, "rb") as f:
+                pem_data = f.read()
+        else:
+            pem_data = pem_key.encode()
+
+        pub_key = serialization.load_pem_public_key(pem_data)
+        if not isinstance(pub_key, ed25519.Ed25519PublicKey):
+            logger.error("Key is not an Ed25519 public key")
+            return None
+        
+        return pub_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+    except Exception as e:
+        logger.error(f"Failed to load supervisor public key: {e}")
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     # Startup
     project_root = os.getenv("TALOS_PROJECT_ROOT", os.getcwd())
     manifest_path = os.getenv("TALOS_POLICY_MANIFEST")
+    audit_url = os.getenv("TALOS_AUDIT_URL", "http://localhost:8002")
     
     state.project_root = project_root
+    state.supervisor_public_key = load_supervisor_key()
     
     # Load policy manifest if available
     manifest = None
     if manifest_path and os.path.exists(manifest_path):
         try:
             manifest = PolicyManifest.load(manifest_path)
-            if not manifest.verify_signature(b""):  # TODO: Load supervisor public key
-                logger.warning("Policy manifest signature invalid - entering Paranoid Mode")
+            if state.supervisor_public_key:
+                if not manifest.verify_signature(state.supervisor_public_key):
+                    logger.warning("Policy manifest signature invalid - entering Paranoid Mode")
+                    state.paranoid_mode = True
+            else:
+                logger.warning("No supervisor key to verify manifest - entering Paranoid Mode")
                 state.paranoid_mode = True
         except Exception as e:
             logger.warning(f"Failed to load policy manifest: {e} - entering Paranoid Mode")
@@ -134,8 +177,40 @@ async def lifespan(app: FastAPI):
     # Initialize session manager with anchor callback
     async def anchor_to_audit(session_id: str, merkle_root: str):
         """Callback to anchor session to Talos Audit Service."""
-        # TODO: Implement actual audit service call
-        logger.info(f"Anchoring {session_id}: {merkle_root[:16]}...")
+        event_id = str(uuid.uuid4())
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        
+        # Build event payload matching audit service's Event model
+        event_data = {
+            "schema_id": "talos.audit_event",
+            "schema_version": "v1",
+            "event_id": event_id,
+            "ts": ts,
+            "request_id": session_id,
+            "surface_id": "terminal-adapter",
+            "outcome": "success",
+            "principal": {"id": "terminal-adapter"},
+            "http": {},
+            "meta": {"session_id": session_id},
+            "hashes": {"merkle_root": merkle_root},
+        }
+        
+        # Compute event_hash (matching Event.__str__ hashing)
+        # Exclude event_hash itself and hashes
+        hash_data = {k: v for k, v in event_data.items() if k not in ["event_hash", "hashes"]}
+        canonical = json.dumps(hash_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        event_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        event_data["event_hash"] = event_hash
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"{audit_url}/events", json=event_data)
+                if response.status_code == 201 or response.status_code == 200:
+                    logger.info(f"Successfully anchored {session_id}: {merkle_root[:16]}")
+                else:
+                    logger.error(f"Failed to anchor {session_id} to audit service: {response.status_code} {response.text}")
+        except Exception as e:
+            logger.error(f"Error anchoring {session_id} to audit service: {e}")
     
     state.session_manager = SessionManager(
         project_root=project_root,
@@ -146,7 +221,7 @@ async def lifespan(app: FastAPI):
     await state.session_manager.start_anchor_loop()
     
     # Initialize TGA client
-    state.tga_client = TGAClient()
+    state.tga_client = TGAClient(supervisor_public_key=state.supervisor_public_key)
     
     # Initialize PTY executor for interactive sessions
     state.pty_executor = PTYExecutor(project_root=project_root)

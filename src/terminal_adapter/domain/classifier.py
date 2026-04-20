@@ -18,7 +18,7 @@ import uuid
 from .crypto import verify_json_signature
 
 
-class RiskLevel(Enum):
+class RiskLevel(str, Enum):
     """Risk classification for terminal commands."""
     READ = "READ"
     WRITE = "WRITE"
@@ -52,7 +52,7 @@ class PolicyManifest:
         
         Returns True if valid, False if tampered (triggers Paranoid Mode).
         """
-        if not self.signature:
+        if not supervisor_public_key or not self.signature:
             return False
             
         # 1. Extract data for signing (everything except the signature itself)
