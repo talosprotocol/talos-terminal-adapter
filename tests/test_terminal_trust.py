@@ -1,21 +1,13 @@
 import pytest
 import os
 import json
-import hashlib
-import uuid
 from unittest.mock import MagicMock, patch, AsyncMock
-from fastapi.testclient import TestClient
-import httpx
-from datetime import datetime, timezone
 
 from terminal_adapter.main import app, state, load_supervisor_key
 from terminal_adapter.domain import (
     RiskLevel, 
     PolicyManifest, 
-    CommandClassifier, 
-    TGAClient,
-    TGAError,
-    SupervisorDecision
+    TGAClient
 )
 from terminal_adapter.domain.crypto import sign_json, generate_keypair
 from cryptography.hazmat.primitives import serialization

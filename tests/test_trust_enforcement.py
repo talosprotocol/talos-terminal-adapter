@@ -1,7 +1,5 @@
 import pytest
 import json
-import os
-from datetime import datetime
 from terminal_adapter.domain.classifier import PolicyManifest, RiskLevel
 from terminal_adapter.domain.tga_client import TGAClient, ActionRequest
 from terminal_adapter.domain.crypto import generate_keypair, sign_json, verify_json_signature

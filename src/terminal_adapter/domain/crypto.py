@@ -5,8 +5,7 @@ Provides Ed25519 signing and verification using RFC 8785 JSON Canonicalization S
 Used for securing communications with the Talos Governance Agent (TGA).
 """
 
-import json
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 import rfc8785
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,

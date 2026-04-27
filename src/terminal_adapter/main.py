@@ -11,14 +11,11 @@ MCP Server implementing the Terminal Adapter specification with:
 import os
 import asyncio
 import logging
-import subprocess
-import pty
-import select
 import json
 import uuid
 import hashlib
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 from contextlib import asynccontextmanager
 
 import httpx
@@ -36,8 +33,6 @@ from terminal_adapter.domain import (
     SupervisorDecision,
     TGAError,
     PTYExecutor,
-    InteractiveSession,
-    SessionState,
 )
 
 # Configure logging

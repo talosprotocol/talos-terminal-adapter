@@ -2,10 +2,8 @@
 Tests for PTYExecutor.
 """
 
-import os
 import pytest
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from terminal_adapter.domain.pty_executor import PTYExecutor, SessionState
 
 @pytest.mark.asyncio
@@ -15,7 +13,7 @@ async def test_start_session():
     
     # We can't easily test real PTYs in all environments, so we'll mock pty.fork
     with patch("pty.fork", return_value=(0, 1)):  # Child process
-        with patch("os.execvp") as mock_exec:
+        with patch("os.execvp"):
             # This would be the child process path, but pty.fork returns 0 for child
             # In the test we actually want to test the parent path mostly
             pass

@@ -5,15 +5,15 @@ Client for communicating with the Talos Governance Agent (TGA) for
 HIGH_RISK command escalation and Supervisor approval flow.
 """
 
-import os
 import json
 import hashlib
-import uuid
-from datetime import datetime
-from typing import Dict, Any, Optional, List
-from enum import Enum
-from dataclasses import dataclass, asdict
 import logging
+import os
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -59,7 +59,7 @@ class ActionRequest:
         if not self.plan_id:
             self.plan_id = str(uuid.uuid4())
         if not self.ts:
-            self.ts = datetime.utcnow().isoformat() + "Z"
+            self.ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         if not self.digest:
             self.digest = self._compute_digest()
     
